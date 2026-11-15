@@ -1,0 +1,198 @@
+{
+  "name": "chatsync",
+  "displayName": "ChatSync — Bridge Chat ↔ VSCode",
+  "description": "Local HTTP bridge that lets a browser userscript (Tampermonkey) read editor context (active file, selection, problems) and apply AI-generated code blocks back into VSCode. CORS-ready, localhost-only, token protected.",
+  "version": "0.1.0",
+  "publisher": "local",
+  "license": "MIT",
+  "icon": "icon.png",
+  "engines": {
+    "vscode": "^1.75.0"
+  },
+  "categories": [
+    "Other",
+    "Programming Languages"
+  ],
+  "keywords": [
+    "deepseek",
+    "chatgpt",
+    "claude",
+    "ai",
+    "bridge",
+    "userscript",
+    "tampermonkey",
+    "apply",
+    "context"
+  ],
+  "main": "./dist/extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "chatsync.start",
+        "title": "ChatSync: Start Server",
+        "icon": "$(play)"
+      },
+      {
+        "command": "chatsync.stop",
+        "title": "ChatSync: Stop Server",
+        "icon": "$(debug-stop)"
+      },
+      {
+        "command": "chatsync.restart",
+        "title": "ChatSync: Restart Server",
+        "icon": "$(refresh)"
+      },
+      {
+        "command": "chatsync.showInfo",
+        "title": "ChatSync: Show Connection Info (port + token + userscript)"
+      },
+      {
+        "command": "chatsync.copyToken",
+        "title": "ChatSync: Copy Auth Token"
+      },
+      {
+        "command": "chatsync.copyUserscript",
+        "title": "ChatSync: Copy Userscript to Clipboard"
+      },
+      {
+        "command": "chatsync.installUserscriptFile",
+        "title": "ChatSync: Save Userscript to Workspace (.user.js)"
+      },
+      {
+        "command": "chatsync.openLogs",
+        "title": "ChatSync: Open Logs"
+      },
+      {
+        "command": "chatsync.selfTest",
+        "title": "ChatSync: Run Self-Test (curl the local API)"
+      }
+    ],
+    "configuration": {
+      "title": "ChatSync",
+      "properties": {
+        "chatsync.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Start the ChatSync local HTTP server when VSCode starts."
+        },
+        "chatsync.port": {
+          "type": "number",
+          "default": 3847,
+          "minimum": 1024,
+          "maximum": 65535,
+          "description": "TCP port for the local bridge server."
+        },
+        "chatsync.portFallbackRange": {
+          "type": "number",
+          "default": 10,
+          "description": "If the port is busy, try up to N next ports (3847, 3848, ...). Set 0 to disable."
+        },
+        "chatsync.host": {
+          "type": "string",
+          "default": "127.0.0.1",
+          "enum": [
+            "127.0.0.1",
+            "0.0.0.0"
+          ],
+          "description": "Bind address. Keep 127.0.0.1 — 0.0.0.0 exposes the bridge to your whole LAN (not recommended)."
+        },
+        "chatsync.requireToken": {
+          "type": "boolean",
+          "default": true,
+          "description": "Require the X-ChatSync-Token header (or ?token=) on every request except /health. Strongly recommended."
+        },
+        "chatsync.token": {
+          "type": "string",
+          "default": "",
+          "description": "Fixed token. Leave empty to auto-generate a stable token per machine (run 'ChatSync: Show Connection Info' to see it)."
+        },
+        "chatsync.allowedOrigins": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          },
+          "default": [
+            "https://chat.deepseek.com",
+            "https://chatgpt.com",
+            "https://claude.ai",
+            "https://gemini.google.com",
+            "http://localhost:*",
+            "http://127.0.0.1:*"
+          ],
+          "description": "Origins allowed by CORS. '*' matches any origin, '*.example.com' matches subdomains. Requests with a non-allowed Origin are rejected with 403."
+        },
+        "chatsync.maxFileSizeKB": {
+          "type": "number",
+          "default": 1024,
+          "description": "Skip files larger than this when returning content."
+        },
+        "chatsync.maxContextChars": {
+          "type": "number",
+          "default": 60000,
+          "description": "Hard cap on characters returned for a single file (content is truncated with a marker)."
+        },
+        "chatsync.applyMode": {
+          "type": "string",
+          "default": "diff",
+          "enum": [
+            "diff",
+            "direct"
+          ],
+          "description": "'diff' opens a VSCode diff preview and waits for you to keep/revert. 'direct' writes the edit immediately (still undoable with Ctrl+Z)."
+        },
+        "chatsync.autoSave": {
+          "type": "boolean",
+          "default": false,
+          "description": "Save the document after a direct apply."
+        },
+        "chatsync.previewTimeoutSeconds": {
+          "type": "number",
+          "default": 300,
+          "description": "How long a diff preview stays pending before it is discarded."
+        },
+        "chatsync.allowRunCommand": {
+          "type": "boolean",
+          "default": false,
+          "description": "Allow POST /run to execute arbitrary VSCode commands from the browser. Off by default (dangerous)."
+        },
+        "chatsync.allowTerminal": {
+          "type": "boolean",
+          "default": false,
+          "description": "Allow POST /terminal to send text to the integrated terminal. Off by default (dangerous)."
+        },
+        "chatsync.rateLimitPerMinute": {
+          "type": "number",
+          "default": 240,
+          "description": "Max requests per minute from localhost before returning 429."
+        },
+        "chatsync.logRequests": {
+          "type": "boolean",
+          "default": true,
+          "description": "Log every HTTP request to the ChatSync output channel."
+        }
+      }
+    }
+  },
+  "scripts": {
+    "build": "node esbuild.mjs",
+    "watch": "node esbuild.mjs --watch",
+    "compile": "tsc -p ./",
+    "typecheck": "tsc -p ./ --noEmit",
+    "package": "npm run build && vsce package --allow-missing-repository --no-dependencies -o chatsync.vsix",
+    "vscode:prepublish": "npm run build",
+    "test:build-smoke": "node test/build-smoke.mjs",
+    "test:smoke": "node test/build-smoke.mjs && node test/smoke.cjs",
+    "test": "npm run typecheck && npm run test:smoke && npm run test:userscript",
+    "test:userscript": "node test/build-smoke.mjs && node test/userscript-smoke.cjs"
+  },
+  "devDependencies": {
+    "@types/node": "^20.14.0",
+    "@types/vscode": "^1.75.0",
+    "@vscode/vsce": "^2.31.1",
+    "esbuild": "^0.23.0",
+    "typescript": "^5.5.0"
+  }
+}
