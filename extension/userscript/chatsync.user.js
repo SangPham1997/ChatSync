@@ -289,17 +289,25 @@
     'textarea',
   ];
 
+  const _composerCache = { node: null, at: 0 };
   function findComposer() {
+    const now = Date.now();
+    if (now - _composerCache.at < 100 && _composerCache.node && document.contains(_composerCache.node)) {
+      return _composerCache.node;
+    }
     for (const sel of INPUT_SELECTORS) {
       const nodes = Array.from(document.querySelectorAll(sel));
       const visible = nodes.filter((n) => n.offsetParent !== null || n === document.activeElement);
       const pool = visible.length ? visible : nodes;
       if (pool.length) {
-        // prefer the lowest one on screen (the composer, not an inline edit box)
         pool.sort((a, b) => b.getBoundingClientRect().top - a.getBoundingClientRect().top);
+        _composerCache.node = pool[0];
+        _composerCache.at = now;
         return pool[0];
       }
     }
+    _composerCache.node = null;
+    _composerCache.at = now;
     return null;
   }
 
@@ -406,28 +414,6 @@
     toast('Đã chèn folder ' + b.root + ': ' + b.filesWithContent + '/' + b.fileCount + ' file (' + b.totalChars + ' chars)', 'ok');
   }
 
-  async function resolveInlineFolders() {
-    const composer = findComposer();
-    if (!composer) { toast('Không tìm thấy ô nhập chat.', 'err'); return; }
-    const text = composer.tagName === 'TEXTAREA' ? composer.value : (composer.innerText || composer.textContent || '');
-    const re = /@folder:([^\s`"'\]\)]+)(?:\s+depth=(\d+))?/g;
-    const matches = [...text.matchAll(re)];
-    if (!matches.length) { toast('Không có @folder:... trong prompt. Ví dụ: @folder:extension/src depth=2', 'warn'); return; }
-    let newText = text;
-    let okCount = 0;
-    for (const m of matches) {
-      const fp = m[1];
-      const dp = m[2] ? parseInt(m[2], 10) : 2;
-      setBusy(true);
-      const r = await api.folder(fp, { depth: dp, includeContent: 1 });
-      setBusy(false);
-      if (!r.ok) { toast('@folder:' + fp + ' -> lỗi ' + r.status, 'err'); continue; }
-      newText = newText.replace(m[0], r.body.contextText);
-      okCount++;
-    }
-    insertIntoComposer(newText, { replace: true });
-    toast('Đã resolve ' + okCount + '/' + matches.length + ' @folder', okCount ? 'ok' : 'warn');
-  }
   async function attachSkill(slug) {
     setBusy(true);
     const r = await api.skillGet(slug, false);
@@ -470,69 +456,6 @@
     toast('Đã reload: ' + r.body.count + ' skill', 'ok', 2000);
     await loadSkillsIntoSelect(selectEl);
   }
-  function openTabsModal() {
-    (async () => {
-      setBusy(true);
-      const r = await api.tabs();
-      setBusy(false);
-      if (!r.ok) return reportError('Tabs', r);
-      const tabs = r.body.tabs || [];
-      if (!tabs.length) {
-        toast('Không có tab nào đang mở.', 'warn');
-        return;
-      }
-      let selected = null;
-      const list = el('div', { class: 'cs-list' });
-      tabs.forEach((t) => {
-        const item = el(
-          'div',
-          {
-            class: `cs-list-item${t.isActive ? ' cs-sel' : ''}`,
-            onclick: () => {
-              list.querySelectorAll('.cs-list-item').forEach((n) => n.classList.remove('cs-sel'));
-              item.classList.add('cs-sel');
-              selected = t;
-            },
-          },
-          el('span', { text: t.path, style: 'flex:1;overflow:hidden;text-overflow:ellipsis' }),
-          t.isDirty ? el('span', { class: 'cs-meta', text: '●' }) : null,
-          t.isActive ? el('span', { class: 'cs-meta', text: 'active' }) : null,
-        );
-        if (t.isActive) selected = t;
-        list.appendChild(item);
-      });
-
-      openModal(
-        `Open tabs (${tabs.length})`,
-        [list, el('div', { class: 'cs-hint', text: 'Chọn 1 file để chèn nội dung vào prompt.' })],
-        [
-          { label: 'Đóng' },
-          {
-            label: 'Chèn nội dung',
-            primary: true,
-            onClick: async (close) => {
-              if (!selected) {
-                toast('Chưa chọn file nào.', 'warn');
-                return;
-              }
-              close();
-              setBusy(true);
-              const f = await api.file(selected.path);
-              setBusy(false);
-              if (!f.ok) return reportError('Read file', f);
-              const body = f.body;
-              insertIntoComposer(
-                `## File: ${body.path}\n\n\`\`\`${body.languageId || ''}\n${body.content}\n\`\`\`\n` +
-                  (body.truncated ? '\n_(file bị cắt bớt do quá dài)_\n' : ''),
-              );
-              toast(`Đã chèn ${body.path} (${body.lineCount} dòng).`, 'ok');
-            },
-          },
-        ],
-      );
-    })();
-  }
-
   function reportError(label, r) {
     const msg = (r.body && (r.body.error || r.body.hint)) || r.error || `HTTP ${r.status}`;
     if (r.status === 0) {
@@ -720,47 +643,6 @@
     setTimeout(() => node.remove(), 5 * 60 * 1000);
   }
 
-  async function applyAllBlocks() {
-    const blocks = collectCodeBlocks().filter((b) => b.code.trim().length > 0);
-    if (!blocks.length) {
-      toast('Không tìm thấy code block nào trong trang.', 'warn');
-      return;
-    }
-    const candidates = blocks.filter((b) => b.pathHint && b.pathHint.includes('/'));
-    if (!candidates.length) {
-      toast('Không có block nào có path rõ ràng (vd "src/foo.ts"). Dùng "⚙ Options" để chỉ định thủ công.', 'warn', 6000);
-      return;
-    }
-    const skipped = blocks.length - candidates.length;
-    const pathCount = new Map();
-    for (const b of candidates) pathCount.set(b.pathHint, (pathCount.get(b.pathHint) || 0) + 1);
-    const conflicts = [...pathCount.entries()].filter(([, n]) => n > 1).map(([p]) => p);
-    if (conflicts.length) {
-      toast(`Bỏ qua batch: ${conflicts.length} path bị trùng. Apply từng block thủ công.\n${conflicts.slice(0,3).join(', ')}${conflicts.length>3?'…':''}`, 'warn', 8000);
-      return;
-    }
-    const applies = candidates.map((b) => ({
-      path: b.pathHint,
-      mode: 'replace',
-      content: b.code,
-      preview: true,
-      save: state.autoSave,
-      label: 'apply-all',
-    }));
-    const msg = `Preview ${applies.length} file trong VSCode?` +
-      (skipped ? `\n(${skipped} block không có path rõ ràng đã bị bỏ qua)` : '') +
-      '\nBạn sẽ confirm từng diff.';
-    if (!confirm(msg)) return;
-    let ok = 0, fail = 0;
-    for (const a of applies) {
-      setBusy(true);
-      const r = await api.apply(a);
-      setBusy(false);
-      if (r.ok && (r.body.preview || r.body.applied)) ok++; else fail++;
-    }
-    toast(`Đã mở ${ok} diff${fail?`, ${fail} lỗi`:''}. Confirm trong VSCode.`, fail ? 'warn' : 'ok', 5000);
-  }
-
   /* ================================================================== *
    * 7. Code block scanning + injection (MutationObserver, streaming-safe)
    * ================================================================== */
@@ -774,6 +656,7 @@
     const out = [];
     for (const sel of CODE_BLOCK_SELECTORS) {
       document.querySelectorAll(sel).forEach((node) => {
+        if (node.closest('[data-cs-done]')) return;
         const pre = node.tagName === 'PRE' ? node : node.closest('pre');
         const codeEl = node.tagName === 'CODE' ? node : pre ? pre.querySelector('code') : null;
         const target = pre || node;
@@ -831,6 +714,7 @@
       if (!ready) continue;
 
       processed.add(block.element);
+      block.element.dataset.csDone = '1';
       const bar = el('div', { class: 'cs-block-tools' });
       const lang = block.language || (block.pathHint ? '' : '');
       bar.appendChild(
@@ -866,7 +750,7 @@
       const detailed = el('button', {
         class: 'cs-chip',
         text: '⚙ Options',
-        title: 'Chọn file / chế độ ghi / patch',
+        title: 'File / chế độ ghi / patch',
         onclick: () => openApplyModal(block.code, block.element),
       });
       const newFile = el('button', {
@@ -930,13 +814,10 @@
     const btnAttach = el('button', { class: 'cs-btn primary', text: '📎 Attach file đang mở', onclick: () => attachActiveFile({ withDiagnostics: false }) });
     const btnAttachDiag = el('button', { class: 'cs-btn', text: '📎 File + Problems', onclick: () => attachActiveFile({ withDiagnostics: true }) });
     const btnErrors = el('button', { class: 'cs-btn', text: '🐞 Attach Problems', onclick: () => attachErrors('Warning') });
-    const btnTabs = el('button', { class: 'cs-btn', text: '🗂 Chọn file…', onclick: openTabsModal });
     const btnFolder = el('button', { class: 'cs-btn', text: '📁 Attach folder…', onclick: attachFolder });
-    const btnResolveFolder = el('button', { class: 'cs-btn', text: '@folder resolve', onclick: resolveInlineFolders, title: 'Tìm @folder:path trong prompt và chèn nội dung folder' });
     const skillSelect = el('select', { style: 'flex:2 1 auto;background:#2b2d33;color:#e8e8e8;border:1px solid #3a3d44;border-radius:8px;padding:6px 8px;font-size:12px' }, el('option', { value: '' }, '📋 Skills (click ↻)'));
     const btnSkillApply = el('button', { class: 'cs-btn', text: 'Add skill', onclick: () => { const v = skillSelect.value; if (!v) return toast('Chọn skill trước', 'warn'); attachSkill(v); } });
     const btnSkillRefresh = el('button', { class: 'cs-btn', text: '↻', title: 'Reload skills', onclick: () => reloadSkills(skillSelect), style: 'flex:0 0 auto;min-width:36px' });
-    const btnApplyAll = el('button', { class: 'cs-btn', text: '⚡ Apply all blocks', onclick: applyAllBlocks });
     const btnRefresh = el('button', { class: 'cs-btn', text: '🔄 Refresh', onclick: refreshStatus });
     const btnSettings = el('button', { class: 'cs-btn', text: '⚙ Settings', onclick: toggleSettings });
 
@@ -973,10 +854,9 @@
       el('h3', {}, '🔌 ChatSync', el('span', { class: 'cs-meta', text: 'VSCode bridge' })),
       statusBox,
       el('div', { class: 'cs-row' }, btnAttach, btnAttachDiag),
-      el('div', { class: 'cs-row' }, btnErrors, btnTabs),
-      el('div', { class: 'cs-row' }, btnFolder, btnResolveFolder),
+      el('div', { class: 'cs-row' }, btnErrors, btnFolder),
       el('div', { class: 'cs-row' }, skillSelect, btnSkillApply, btnSkillRefresh),
-      el('div', { class: 'cs-row' }, btnApplyAll, btnRefresh, btnSettings),
+      el('div', { class: 'cs-row' }, btnRefresh, btnSettings),
       settingsBox,
     );
 
@@ -1116,11 +996,14 @@
       }, 220);
     };
     const observer = new MutationObserver(schedule);
-    observer.observe(document.body || document.documentElement, { childList: true, subtree: true, characterData: true });
+    observer.observe(document.body || document.documentElement, { childList: true, subtree: true });
 
-    setInterval(schedule, 1500); // catches "streaming finished" transitions
-    setInterval(refreshStatus, POLL_MS);
+    setInterval(() => { if (!document.hidden) schedule(); }, 1500); // skip when tab hidden
+    setInterval(() => { if (!document.hidden) refreshStatus(); }, POLL_MS);
     window.addEventListener('focus', refreshStatus);
+    document.addEventListener('visibilitychange', () => {
+      if (!document.hidden) schedule();
+    });
 
     if (typeof GM_registerMenuCommand === 'function') {
       GM_registerMenuCommand('ChatSync: Attach active file', () => attachActiveFile({ withDiagnostics: true }));

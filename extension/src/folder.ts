@@ -3,9 +3,11 @@ import * as path from 'path';
 import * as fs from 'fs';
 import { ApiRequest, ApiResponse } from './server';
 import { getConfig } from './config';
-import { clamp, truncate, workspaceRoot  } from './util';
+import { clamp, truncate, workspaceRoot } from './util';
 import { isPathAllowed } from './context';
 import * as log from './logger';
+
+type FolderMode = 'smart' | 'summary' | 'signatures' | 'full' | 'tree';
 
 const DEFAULT_IGNORE = new Set([
   'node_modules', '.git', 'dist', 'out', 'build', '.next', 'target',
@@ -14,6 +16,9 @@ const DEFAULT_IGNORE = new Set([
 ]);
 
 const BINARY_EXT = /\.(png|jpe?g|gif|webp|ico|bmp|tiff?|pdf|zip|gz|tar|rar|7z|mp[34]|wav|flac|ogg|webm|mov|avi|woff2?|ttf|eot|otf|bin|exe|dll|so|dylib|class|jar|map|min\.js)$/i;
+
+const TEST_EXT = /\.(test|spec)\.(ts|tsx|js|jsx|py|rb|go|rs|java|kt)$/i;
+const CONFIG_NAME = /^(package\.json|tsconfig\.json|\.eslintrc.*|webpack\.config\.\w+|vite\.config\.\w+|rollup\.config\.\w+|\.gitignore|\.env\.example|README\.md|LICENSE|esbuild\.mjs)$/i;
 
 const LANG_OF: Record<string, string> = {
   '.ts': 'typescript', '.tsx': 'typescriptreact',
@@ -34,8 +39,12 @@ interface FileEntry {
   language: string;
   chars: number;
   content?: string;
+  signatures?: string;
   truncated: boolean;
   skipped?: string;
+  mtime: number;
+  size: number;
+  priority: number;
 }
 
 interface WalkState {
@@ -46,16 +55,91 @@ interface WalkState {
   truncated: boolean;
 }
 
-function safeLstat(p: string): fs.Stats | undefined {
-  try { return fs.lstatSync(p); } catch { return undefined; }
+function safeStat(p: string): fs.Stats | undefined {
+  try { return fs.statSync(p); } catch { return undefined; }
+}
+
+function extractSignatures(content: string, ext: string): string {
+  const lines = content.split('\n');
+  const out: string[] = [];
+  const e = ext.toLowerCase();
+
+  if (['.ts', '.tsx', '.js', '.jsx', '.mjs', '.cjs'].includes(e)) {
+    for (const line of lines) {
+      const t = line.trim();
+      if (!t || t.startsWith('//') || t.startsWith('/*') || t.startsWith('*')) continue;
+      if (/^(export\s+)?(async\s+)?(function|class|interface|type|enum)\s+\w+/.test(t) ||
+          /^(export\s+)?(const|let|var)\s+\w+\s*[:=]/.test(t) ||
+          /^export\s+\{/.test(t) ||
+          /^export\s+default\s+/.test(t) ||
+          /^(public|private|protected)\s+\w+\s*[:(]/.test(t)) {
+        out.push(t);
+      }
+    }
+  } else if (e === '.py') {
+    for (const line of lines) {
+      const t = line.trim();
+      if (/^(class|def|async\s+def)\s+\w+/.test(t) || /^@\w+/.test(t)) out.push(t);
+    }
+  } else if (e === '.go') {
+    for (const line of lines) {
+      const t = line.trim();
+      if (/^(func|type|var|const)\s+/.test(t)) out.push(t);
+    }
+  } else if (e === '.rs') {
+    for (const line of lines) {
+      const t = line.trim();
+      if (/^(pub\s+)?(fn|struct|enum|trait|impl|type|const|static|mod)\s+/.test(t)) out.push(t);
+    }
+  } else {
+    let count = 0;
+    for (const line of lines) {
+      if (line.trim() && !line.trim().startsWith('//') && !line.trim().startsWith('#')) {
+        out.push(line);
+        count++;
+        if (count >= 15) break;
+      }
+    }
+  }
+
+  return out.length > 0 ? out.join('\n') : lines.slice(0, 10).join('\n');
+}
+
+function computePriority(f: FileEntry): number {
+  let p = 0;
+  const name = path.basename(f.path);
+  if (CONFIG_NAME.test(name)) p += 100;
+  if (TEST_EXT.test(name)) p -= 100;
+  if (f.size > 0 && f.size < 5000) p += 20;
+  else if (f.size > 50000) p -= 20;
+  if (f.mtime > 0) {
+    const daysOld = (Date.now() - f.mtime) / (1000 * 60 * 60 * 24);
+    if (daysOld < 1) p += 50;
+    else if (daysOld < 7) p += 20;
+  }
+  if (/^(index|main|app|server|extension)\.\w+$/i.test(name)) p += 80;
+  return p;
+}
+
+function decideMode(f: FileEntry, mode: FolderMode): 'tree' | 'signatures' | 'summary' | 'full' {
+  if (mode === 'tree') return 'tree';
+  if (mode === 'full') return 'full';
+  if (mode === 'signatures') return 'signatures';
+  if (mode === 'summary') return 'summary';
+
+  const name = path.basename(f.path);
+  if (TEST_EXT.test(name)) return 'tree';
+  if (CONFIG_NAME.test(name)) return 'full';
+  if (f.size > 15000) return 'signatures';
+  return 'summary';
 }
 
 function walkFolder(absDir: string, relDir: string, depth: number, maxDepth: number, opts: {
   ignore: Set<string>;
   maxFiles: number;
   maxChars: number;
-  includeContent: boolean;
   perFileMax: number;
+  mode: FolderMode;
 }, state: WalkState): void {
   if (depth > maxDepth || state.filesSeen >= opts.maxFiles || state.truncated) return;
 
@@ -79,7 +163,7 @@ function walkFolder(absDir: string, relDir: string, depth: number, maxDepth: num
 
     const abs = path.join(absDir, name);
     const rel = relDir ? `${relDir}/${name}` : name;
-    const st = safeLstat(abs);
+    const st = safeStat(abs);
     if (!st) continue;
 
     if (st.isDirectory()) {
@@ -89,59 +173,87 @@ function walkFolder(absDir: string, relDir: string, depth: number, maxDepth: num
       state.filesSeen++;
       const ext = path.extname(name).toLowerCase();
       const lang = LANG_OF[ext] || 'text';
-      const entry: FileEntry = { path: rel, language: lang, chars: 0, truncated: false };
+      const entry: FileEntry = {
+        path: rel, language: lang, chars: 0, truncated: false,
+        mtime: st.mtimeMs, size: st.size, priority: 0,
+      };
 
       if (BINARY_EXT.test(name)) {
         entry.skipped = 'binary';
         state.treeLines.push(`${pad}FILE ${name} (binary)`);
-      } else if (!opts.includeContent) {
-        entry.skipped = 'content disabled';
-        state.treeLines.push(`${pad}FILE ${name}`);
-      } else if (st.size > opts.perFileMax * 4) {
-        entry.skipped = `too large (${Math.round(st.size / 1024)} KB)`;
-        state.treeLines.push(`${pad}FILE ${name} (${Math.round(st.size / 1024)} KB, skipped)`);
+        state.files.push(entry);
+        continue;
+      }
+
+      const decision = decideMode(entry, opts.mode);
+      entry.priority = computePriority(entry);
+
+      if (decision === 'tree') {
+        entry.skipped = 'tree-only';
+        state.treeLines.push(`${pad}FILE ${name} (${Math.round(st.size / 1024)} KB)`);
+        state.files.push(entry);
+        continue;
+      }
+
+      let raw: string;
+      try { raw = fs.readFileSync(abs, 'utf8'); }
+      catch (e) {
+        entry.skipped = `read error: ${(e as Error).message}`;
+        state.treeLines.push(`${pad}FILE ${name} (read error)`);
+        state.files.push(entry);
+        continue;
+      }
+      entry.chars = raw.length;
+
+      let payload: string;
+      if (decision === 'signatures') {
+        payload = extractSignatures(raw, ext);
+        entry.signatures = payload;
+      } else if (decision === 'summary') {
+        const headLines = raw.split('\n').slice(0, 30).join('\n');
+        const sigs = extractSignatures(raw, ext);
+        payload = `// head (first 30 lines):\n${headLines}\n\n// signatures:\n${sigs}`;
       } else {
-        let raw: string;
-        try { raw = fs.readFileSync(abs, 'utf8'); }
-        catch (e) {
-          entry.skipped = `read error: ${(e as Error).message}`;
-          state.treeLines.push(`${pad}FILE ${name} (read error)`);
+        const t = truncate(raw, opts.perFileMax);
+        payload = t.text;
+        entry.truncated = t.truncated;
+      }
+
+      if (payload.length > opts.perFileMax) {
+        payload = payload.slice(0, opts.perFileMax) + '\n// [...truncated...]';
+        entry.truncated = true;
+      }
+
+      const treeUsed = state.treeLines.join('\n').length;
+      const remaining = opts.maxChars - state.totalChars - treeUsed;
+      if (payload.length > remaining) {
+        if (remaining < 500) {
+          entry.skipped = 'budget exhausted';
+          state.truncated = true;
+          state.treeLines.push(`${pad}FILE ${name} (budget exhausted)`);
           state.files.push(entry);
           continue;
         }
-        const t = truncate(raw, opts.perFileMax);
-        entry.content = t.text;
-        entry.chars = raw.length;
-        entry.truncated = t.truncated;
-
-        const treeUsed = state.treeLines.join('\n').length;
-        const remaining = opts.maxChars - state.totalChars - treeUsed;
-        if (entry.content.length > remaining) {
-          if (remaining < 500) {
-            entry.skipped = 'budget exhausted';
-            entry.content = undefined;
-            state.truncated = true;
-            state.files.push(entry);
-            state.treeLines.push(`${pad}FILE ${name} (budget exhausted)`);
-            continue;
-          }
-          entry.content = entry.content.slice(0, remaining) + '\n\n[...ChatSync: truncated...]';
-          entry.truncated = true;
-          state.truncated = true;
-        }
-        state.totalChars += entry.content.length;
-        state.treeLines.push(`${pad}FILE ${name} (${entry.chars} chars)`);
+        payload = payload.slice(0, remaining) + '\n// [...budget...]';
+        entry.truncated = true;
+        state.truncated = true;
       }
+      entry.content = payload;
+      state.totalChars += payload.length;
+      state.treeLines.push(`${pad}FILE ${name} (${raw.length} chars -> ${payload.length} sent)`);
       state.files.push(entry);
     }
   }
 }
 
-function buildContextText(rootRel: string, state: WalkState): string {
+function buildContextText(rootRel: string, state: WalkState, mode: FolderMode): string {
   const lines: string[] = [];
   lines.push(`## Folder: ${rootRel || '.'}`);
   lines.push('');
-  lines.push(`- files: ${state.files.filter((f) => f.content).length} with content / ${state.files.length} scanned`);
+  lines.push(`- mode: \`${mode}\``);
+  const withContent = state.files.filter((f) => f.content && !f.skipped);
+  const codeCount = state.files.filter((f) => !f.skipped).length;
+  lines.push(`- files: ${withContent.length} with content / ${codeCount} code / ${state.files.length} scanned`);
   lines.push(`- total chars: ${state.totalChars}`);
   if (state.truncated) lines.push('- **truncated** (char budget exhausted)');
   lines.push('');
@@ -149,22 +261,18 @@ function buildContextText(rootRel: string, state: WalkState): string {
   lines.push('```');
   lines.push(...state.treeLines);
   lines.push('```');
-  for (const f of state.files) {
-    if (!f.content) continue;
+
+  for (const f of withContent) {
+    const header = f.signatures
+      ? `### ${f.path} (signatures, ${f.chars} chars source)`
+      : `### ${f.path} (${f.chars} chars${f.truncated ? ', truncated' : ''})`;
     lines.push('');
-    lines.push(`### ${f.path} (${f.chars} chars${f.truncated ? ', truncated' : ''})`);
+    lines.push(header);
     lines.push('```' + f.language);
-    lines.push(f.content);
+    lines.push(f.content!);
     lines.push('```');
   }
   return lines.join('\n');
-}
-
-function parseBool(v: unknown, dflt: boolean): boolean {
-  if (v === undefined || v === null || v === '') return dflt;
-  if (typeof v === 'boolean') return v;
-  const s = String(v).toLowerCase();
-  return s === '1' || s === 'true' || s === 'yes' || s === 'on';
 }
 
 export async function handleFolderContent(req: ApiRequest): Promise<ApiResponse> {
@@ -190,7 +298,9 @@ export async function handleFolderContent(req: ApiRequest): Promise<ApiResponse>
   }
 
   const depth = clamp(Number(q.get('depth') ?? 2), 0, 5, 2);
-  const includeContent = parseBool(q.get('includeContent') ?? q.get('content'), true);
+  const modeParam = (q.get('mode') ?? 'smart').toLowerCase();
+  const validModes: FolderMode[] = ['smart', 'summary', 'signatures', 'full', 'tree'];
+  const mode: FolderMode = validModes.includes(modeParam as FolderMode) ? (modeParam as FolderMode) : 'smart';
   const maxFiles = clamp(Number(q.get('maxFiles') ?? 50), 1, 200, 50);
   const globalChars = clamp(Number(q.get('maxChars') ?? cfg.maxContextChars), 1000, 500000, cfg.maxContextChars);
   const perFileMax = clamp(Number(q.get('perFileMax') ?? 40000), 500, 200000, 40000);
@@ -199,23 +309,32 @@ export async function handleFolderContent(req: ApiRequest): Promise<ApiResponse>
 
   const relNormalized = path.relative(root, abs).split(path.sep).join('/');
   const state: WalkState = { files: [], treeLines: [`DIR  ${relNormalized}/`], totalChars: 0, filesSeen: 0, truncated: false };
-  walkFolder(abs, '', 1, depth, { ignore, maxFiles, maxChars: globalChars, includeContent, perFileMax }, state);
+  walkFolder(abs, '', 1, depth, { ignore, maxFiles, maxChars: globalChars, perFileMax, mode }, state);
 
-  const contextText = buildContextText(relNormalized, state);
-  log.log(`folder ${relNormalized} depth=${depth} files=${state.files.length} chars=${state.totalChars}${state.truncated ? ' [truncated]' : ''}`);
+  const withContent = state.files.filter((f) => f.content);
+  const without = state.files.filter((f) => !f.content);
+  state.files = [...withContent.sort((a, b) => b.priority - a.priority), ...without];
+
+  const contextText = buildContextText(relNormalized, state, mode);
+  log.log(`folder ${relNormalized} mode=${mode} depth=${depth} files=${state.files.length} chars=${state.totalChars}${state.truncated ? ' [truncated]' : ''}`);
 
   return {
     status: 200,
     body: {
       ok: true,
       root: relNormalized,
+      mode,
       depth,
       fileCount: state.files.length,
       filesWithContent: state.files.filter((f) => f.content).length,
       totalChars: state.totalChars,
       truncated: state.truncated,
       tree: state.treeLines.join('\n'),
-      files: state.files.map((f) => ({ path: f.path, language: f.language, chars: f.chars, truncated: f.truncated, skipped: f.skipped })),
+      files: state.files.map((f) => ({
+        path: f.path, language: f.language, chars: f.chars,
+        sent: f.content ? f.content.length : 0,
+        truncated: f.truncated, skipped: f.skipped,
+      })),
       contextText,
     },
   };

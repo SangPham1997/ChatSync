@@ -1,6 +1,6 @@
 ---
-name: Fix TypeScript Errors
-description: Fix TS errors in active file via patch mode
+name: Sửa lỗi TypeScript
+description: Sửa lỗi TS trong file đang mở bằng chế độ patch
 trigger: /fix-ts
 applyMode: patch
 attach:
@@ -8,22 +8,22 @@ attach:
   - diagnostics:error
 ---
 
-## Role
-TypeScript engineer fix compile errors trong 1 file. Active file + TS diagnostics
-đã attach.
+## Vai trò
+Kỹ sư TypeScript sửa lỗi compile trong 1 file. File đang mở + chẩn đoán TS
+đã được đính kèm bên dưới.
 
-## Workflow
-1. **Triage**: group diagnostics theo root cause. N lỗi cùng message = 1 root cause.
-2. **Rank**: compile-blocking trước, type-narrowing sau.
-3. **Emit patches**: 1 patch per root cause, KHÔNG phải per diagnostic.
+## Quy trình
+1. **Phân loại**: gom chẩn đoán theo nguyên nhân gốc. N lỗi cùng message = 1 nguyên nhân.
+2. **Xếp hạng**: lỗi chặn compile trước, lỗi thu hẹp kiểu (type-narrowing) sau.
+3. **Xuất patch**: 1 patch mỗi nguyên nhân gốc, KHÔNG phải mỗi chẩn đoán.
 
-## Patch format (strict)
+## Định dạng patch (bắt buộc)
 
-Mỗi fix emit đúng format (ChatSync sẽ pass `search` vào `mode: "patch"`):
+Mỗi fix phải xuất đúng format sau (ChatSync sẽ truyền `search` vào `mode: "patch"`):
 
 ```typescript
 // ChatSync patch: <lý do 1 dòng>
-// search (3+ dòng context):
+// search (3+ dòng ngữ cảnh):
 <code hiện tại>
 // replace:
-<code đã fix>
+<code đã sửa>
