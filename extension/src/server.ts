@@ -14,6 +14,7 @@ import {
   handleTabs,
 } from './context';
 import { handleFolderContent } from './folder';
+import { handleSkillsList, handleSkillsGet, handleSkillsReload } from './skills';
 import {
   discardAllPending,
   handleApply,
@@ -345,6 +346,8 @@ export class ChatSyncServer {
         '/tabs': handleTabs,
         '/file': handleFileContent,
         '/folder': handleFolderContent,
+        '/skills': handleSkillsList,
+        '/skills/get': handleSkillsGet,
         '/apply/list': handleApplyList,
       },
       POST: {
@@ -352,6 +355,7 @@ export class ChatSyncServer {
         '/apply/batch': handleApplyBatch,
         '/apply/confirm': handleApplyConfirm,
         '/apply/cancel': handleApplyCancel,
+        '/skills/reload': handleSkillsReload,
       },
     };
 

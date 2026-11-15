@@ -3,6 +3,7 @@ import * as path from 'path';
 import * as fs from 'fs';
 import * as os from 'os';
 import { ChatSyncServer, readUserscriptFile } from './server';
+import { skillsDir, discardSkillsCache } from './skills';
 import { getConfig } from './config';
 import { getToken, relToWorkspace, workspaceRoot } from './util';
 import * as log from './logger';
@@ -229,6 +230,24 @@ function registerCommands(context: vscode.ExtensionContext): void {
     );
   });
 
+  // ChatSync: skills open folder (static import)
+  reg('chatsync.skillsOpenFolder', async () => {
+    const dir = skillsDir();
+    if (!dir) {
+      void vscode.window.showWarningMessage('ChatSync: no workspace folder open');
+      return;
+    }
+    if (!fs.existsSync(dir)) {
+      fs.mkdirSync(dir, { recursive: true });
+    }
+    await vscode.commands.executeCommand('revealFileInOS', vscode.Uri.file(dir));
+  });
+
+  reg('chatsync.skillsReload', async () => {
+    discardSkillsCache();
+    log.log('skills cache cleared via command');
+    void vscode.window.showInformationMessage('ChatSync skills cache cleared — refetch on next /skills call');
+  });
   reg('chatsync.selfTest', () => selfTest());
 }
 

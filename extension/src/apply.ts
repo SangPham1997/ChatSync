@@ -48,6 +48,28 @@ interface PendingApply {
 const pending = new Map<string, PendingApply>();
 const backupDir = path.join(os.tmpdir(), 'chatsync-backups');
 
+let _lastBackupCleanup = 0;
+function cleanupOldBackups(olderThanDays = 7): void {
+  const now = Date.now();
+  if (now - _lastBackupCleanup < 60 * 60 * 1000) return;
+  _lastBackupCleanup = now;
+  try {
+    if (!fs.existsSync(backupDir)) return;
+    const cutoff = now - olderThanDays * 24 * 60 * 60 * 1000;
+    let removed = 0;
+    for (const f of fs.readdirSync(backupDir)) {
+      const abs = path.join(backupDir, f);
+      try {
+        const st = fs.statSync(abs);
+        if (st.mtimeMs < cutoff) { fs.unlinkSync(abs); removed++; }
+      } catch { /* ignore */ }
+    }
+    if (removed > 0) log.log(`backup cleanup: removed ${removed} stale file(s)`);
+  } catch (e) {
+    log.warn('backup cleanup failed', String(e));
+  }
+}
+
 /* ------------------------------------------------------------------ *
  * Helpers
  * ------------------------------------------------------------------ */
@@ -250,6 +272,10 @@ async function performDirectApply(
       const doc = await vscode.workspace.openTextDocument(uri);
       await vscode.window.showTextDocument(doc, { preview: false });
     }
+    await new Promise((r) => setTimeout(r, 100));
+    const newFileDiags = collectDiagnostics({ minSeverity: 'Error', limit: 50 }).filter(
+      (d) => d.absPath === finalPath,
+    );
     return {
       status: 200,
       body: {
@@ -259,6 +285,7 @@ async function performDirectApply(
         path: relToWorkspace(finalPath),
         absPath: finalPath,
         charsWritten: content.length,
+        diagnosticsAfter: newFileDiags,
         message: `Created ${relToWorkspace(finalPath)}`,
       },
     };
@@ -411,18 +438,21 @@ async function performPreviewApply(target: ResolvedTarget, mode: ApplyMode, payl
     { preview: true, preserveFocus: false },
   );
 
-  // In-editor confirmation (mirrors POST /apply/confirm)
-  const pick = await vscode.window.showInformationMessage(
-    `ChatSync preview: ${mode} → ${target.relPath}`,
-    { modal: false },
-    'Apply',
-    'Discard',
-  );
-  if (pick === 'Apply') {
-    void confirmApply(id, 'editor-button');
-  } else if (pick === 'Discard') {
-    void cancelApply(id, 'editor-button');
-  }
+  // Fire-and-forget in-editor confirmation (don't block HTTP; client timeout is 20s)
+  void vscode.window
+    .showInformationMessage(
+      `ChatSync preview: ${mode} → ${target.relPath}`,
+      { modal: false },
+      'Apply',
+      'Discard',
+    )
+    .then((pick) => {
+      if (pick === 'Apply') {
+        void confirmApply(id, 'editor-button');
+      } else if (pick === 'Discard') {
+        void cancelApply(id, 'editor-button');
+      }
+    });
 
   return {
     status: 200,
@@ -447,13 +477,28 @@ export async function confirmApply(id: string, source: string): Promise<ApiRespo
   if (!p) {
     return { status: 404, body: { ok: false, error: `unknown or expired applyId "${id}"` } };
   }
-  cleanupPending(p);
   let doc: vscode.TextDocument;
   try {
     doc = await vscode.workspace.openTextDocument(p.targetUri);
   } catch (e) {
+    cleanupPending(p);
     return { status: 500, body: { ok: false, error: (e as Error).message } };
   }
+  if (doc.getText() !== p.oldContent) {
+    cleanupPending(p);
+    log.warn(`confirm ${id}: file ${p.relPath} changed since preview, refusing`);
+    return {
+      status: 409,
+      body: {
+        ok: false,
+        error: `file "${p.relPath}" changed since preview — re-run apply with preview:true to refresh the diff`,
+        path: p.relPath,
+        applyId: id,
+        hint: 'the diff you saw is stale; the pending edit was discarded',
+      },
+    };
+  }
+  cleanupPending(p);
   let backup: string | undefined;
   try {
     if (doc.uri.scheme === 'file' && fs.existsSync(doc.uri.fsPath)) {
@@ -507,6 +552,7 @@ function inferPathFromContent(content: string): string | undefined {
 }
 
 export async function handleApply(req: ApiRequest): Promise<ApiResponse> {
+  cleanupOldBackups();
   const cfg = getConfig();
   const body = (req.body ?? {}) as ApplyPayload & { code?: string; text?: string };
 

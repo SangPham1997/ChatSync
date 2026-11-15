@@ -264,17 +264,26 @@ export function isPathAllowed(uri: vscode.Uri): boolean {
 
 const OUTSIDE_MSG = 'path is outside the workspace and not open in VSCode (blocked by chatsync containment)';
 
+const _basenameCache = new Map<string, { at: number; fsPath: string | null }>();
+const _BASENAME_TTL_MS = 5000;
+
 function byBasename(name: string): vscode.Uri | undefined {
   const want = path.basename(name).toLowerCase();
   const root = workspaceRoot();
   if (!root) {
     return undefined;
   }
+  const cacheKey = root + '|' + want;
+  const cached = _basenameCache.get(cacheKey);
+  const now = Date.now();
+  if (cached && now - cached.at < _BASENAME_TTL_MS) {
+    return cached.fsPath ? vscode.Uri.file(cached.fsPath) : undefined;
+  }
   let best: vscode.Uri | undefined;
   let bestDepth = Number.MAX_SAFE_INTEGER;
   const skip = new Set(['node_modules', '.git', 'dist', 'out', 'build', '.next', 'target', '__pycache__']);
   const walk = (dir: string, depth: number) => {
-    if (depth > 6 || best) {
+    if (depth > 5 || best) {
       return;
     }
     let entries: string[];
@@ -306,6 +315,12 @@ function byBasename(name: string): vscode.Uri | undefined {
     }
   };
   walk(root, 0);
+  _basenameCache.set(cacheKey, { at: now, fsPath: best ? best.fsPath : null });
+  if (_basenameCache.size > 200) {
+    for (const [k, v] of _basenameCache) {
+      if (now - v.at >= _BASENAME_TTL_MS) _basenameCache.delete(k);
+    }
+  }
   return best;
 }
 

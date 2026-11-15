@@ -10,7 +10,7 @@ import * as log from './logger';
 const DEFAULT_IGNORE = new Set([
   'node_modules', '.git', 'dist', 'out', 'build', '.next', 'target',
   '__pycache__', '.venv', 'venv', 'coverage', '.idea', '.vscode', 'reports',
-  '.cache', '.parcel-cache', '.turbo', '.svelte-kit', '.nuxt',
+  '.cache', '.parcel-cache', '.turbo', '.svelte-kit', '.nuxt', '_backups',
 ]);
 
 const BINARY_EXT = /\.(png|jpe?g|gif|webp|ico|bmp|tiff?|pdf|zip|gz|tar|rar|7z|mp[34]|wav|flac|ogg|webm|mov|avi|woff2?|ttf|eot|otf|bin|exe|dll|so|dylib|class|jar|map|min\.js)$/i;
@@ -75,6 +75,7 @@ function walkFolder(absDir: string, relDir: string, depth: number, maxDepth: num
     if (opts.ignore.has(name)) continue;
     if (name.startsWith('.') && name !== '.env.example') continue;
     if (ent.isSymbolicLink()) continue;
+    if (/\.bak(-|$)/.test(name)) continue;
 
     const abs = path.join(absDir, name);
     const rel = relDir ? `${relDir}/${name}` : name;
@@ -113,7 +114,8 @@ function walkFolder(absDir: string, relDir: string, depth: number, maxDepth: num
         entry.chars = raw.length;
         entry.truncated = t.truncated;
 
-        const remaining = opts.maxChars - state.totalChars;
+        const treeUsed = state.treeLines.join('\n').length;
+        const remaining = opts.maxChars - state.totalChars - treeUsed;
         if (entry.content.length > remaining) {
           if (remaining < 500) {
             entry.skipped = 'budget exhausted';

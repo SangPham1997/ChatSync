@@ -128,8 +128,8 @@ export function truncate(text: string, max: number): { text: string; truncated: 
     return { text, truncated: false };
   }
   const head = Math.floor(max * 0.8);
-  const tail = max - head - 60;
-  const cut = tail > 200 ? text.slice(-tail) : '';
+  const tailWanted = Math.max(200, max - head - 60);
+  const cut = text.length > head + tailWanted ? text.slice(-tailWanted) : '';
   return {
     text: `${text.slice(0, head)}\n\n/* ...ChatSync: truncated ${text.length - head - cut.length} chars... */\n\n${cut}`,
     truncated: true,

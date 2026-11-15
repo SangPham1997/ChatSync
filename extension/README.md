@@ -34,7 +34,10 @@ Status lives in the VSCode status bar: `$(plug) ChatSync :3847`. Click it for ac
 | POST | `/apply/confirm` · `/apply/cancel` | resolve a diff preview by `applyId` |
 | GET | `/apply/list` | pending previews |
 | GET | `/userscript.js` | the userscript source |
-| POST | `/run` · `/terminal` | disabled by default (`chatsync.allowRunCommand`, `chatsync.allowTerminal`) |
+| GET | `/folder?path=` | walk a folder — returns tree + file contents ready for prompt |
+| GET | `/skills` | list markdown skills from `.chatsync/skills/` |
+| GET | `/skills/get?slug=` | resolve skill body + auto-attached context |
+| POST | `/skills/reload` | invalidate skills cache |
 
 `/apply` body:
 
@@ -42,11 +45,10 @@ Status lives in the VSCode status bar: `$(plug) ChatSync :3847`. Click it for ac
 {
   "path": "src/app.ts",          // optional: relative to workspace, absolute, or just a filename;
                                  // defaults to the active editor
-  "mode": "replace",             // replace | replaceSelection | insert | insertAtLine | append
-                                 // | patch | lines | newFile
+  "mode": "replace",             // replace | replaceSelection | insert | append
+                                 // | patch | newFile
   "content": "```ts\n// code\n```", // markdown fences and a leading `// path/to/file` comment are stripped
   "search": "old code",          // required for mode=patch (must match exactly once, or set replaceAll)
-  "line": 10, "endLine": 20,     // for insertAtLine / lines (1-based, inclusive)
   "preview": true,               // open a VSCode diff and wait for confirmation
   "save": false,
   "label": "userscript"

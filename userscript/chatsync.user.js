@@ -46,10 +46,8 @@
     preview: true, // ask VSCode for a diff preview before writing
     autoSave: false,
     insertMode: 'replace', // default apply mode for "Apply to VSCode"
-    online: false,
     health: null,
     lastHoveredBlock: null,
-    busy: false,
   };
 
   function loadSettings() {
@@ -158,11 +156,12 @@
     contextFile: (params) => request('GET', `/context/file?${params || 'diagnostics=1'}`),
     errors: (min) => request('GET', `/context/errors?minSeverity=${min || 'Warning'}&limit=100`),
     tabs: () => request('GET', '/tabs'),
-    workspace: () => request('GET', '/context/workspace'),
     file: (p) => request('GET', `/file?path=${encodeURIComponent(p)}`),
     folder: (p, opts) => { const params = new URLSearchParams({ path: p }); if (opts) for (const k of Object.keys(opts)) { const v = opts[k]; if (v !== undefined && v !== null) params.set(k, String(v)); } return request('GET', '/folder?' + params.toString()); },
+    skillsList: () => request('GET', '/skills'),
+    skillGet: (slug, raw) => request('GET', '/skills/get?slug=' + encodeURIComponent(slug) + (raw ? '&raw=1' : '')),
+    skillsReload: () => request('POST', '/skills/reload', {}),
     apply: (payload) => request('POST', '/apply', payload),
-    applyBatch: (applies) => request('POST', '/apply/batch', { applies }),
     confirm: (id) => request('POST', '/apply/confirm', { applyId: id }),
     cancel: (id) => request('POST', '/apply/cancel', { applyId: id }),
   };
@@ -367,7 +366,7 @@
       toast('VSCode không có file nào đang mở.', 'warn');
       return;
     }
-    const text = info.contextText || buildFallbackContext(info);
+    const text = info.contextText || '';
     if (insertIntoComposer(text)) {
       const sel = info.selections && info.selections.find((s) => !s.isCursor);
       toast(
@@ -378,11 +377,6 @@
     }
   }
 
-  function buildFallbackContext(info) {
-    const fence = '```' + (info.languageId || '');
-    const body = (info.selections || []).find((s) => !s.isCursor);
-    return `## Active file: ${info.relPath || info.fileName}\n\n${fence}\n${body ? body.text : info.content || ''}\n\`\`\`\n`;
-  }
 
   async function attachErrors(minSeverity) {
     setBusy(true);
@@ -399,7 +393,7 @@
   }
 
   async function attachFolder() {
-    const p = prompt('Folder path (relative to workspace):', 'src');
+    const p = prompt('Folder path (relative to workspace):', 'extension/src');
     if (!p) return;
     const depthStr = prompt('Max depth (default 2, 0-5):', '2');
     const depth = depthStr ? parseInt(depthStr, 10) : 2;
@@ -418,7 +412,7 @@
     const text = composer.tagName === 'TEXTAREA' ? composer.value : (composer.innerText || composer.textContent || '');
     const re = /@folder:([^\s`"'\]\)]+)(?:\s+depth=(\d+))?/g;
     const matches = [...text.matchAll(re)];
-    if (!matches.length) { toast('Không có @folder:... trong prompt. Ví dụ: @folder:src depth=2', 'warn'); return; }
+    if (!matches.length) { toast('Không có @folder:... trong prompt. Ví dụ: @folder:extension/src depth=2', 'warn'); return; }
     let newText = text;
     let okCount = 0;
     for (const m of matches) {
@@ -433,6 +427,48 @@
     }
     insertIntoComposer(newText, { replace: true });
     toast('Đã resolve ' + okCount + '/' + matches.length + ' @folder', okCount ? 'ok' : 'warn');
+  }
+  async function attachSkill(slug) {
+    setBusy(true);
+    const r = await api.skillGet(slug, false);
+    setBusy(false);
+    if (!r.ok) return reportError('Attach skill', r);
+    const b = r.body;
+    insertIntoComposer(b.combinedText);
+    toast('Skill "' + b.name + '": ' + b.attachResolved + '/' + b.attachRequested + ' attachments (' + b.combinedText.length + ' chars)', 'ok');
+  }
+
+  async function loadSkillsIntoSelect(selectEl) {
+    if (!selectEl) return;
+    selectEl.innerHTML = '';
+    selectEl.appendChild(el('option', { value: '' }, '📋 loading...'));
+    setBusy(true);
+    const r = await api.skillsList();
+    setBusy(false);
+    selectEl.innerHTML = '';
+    if (!r.ok) {
+      selectEl.appendChild(el('option', { value: '' }, '❌ /skills error ' + r.status));
+      return;
+    }
+    const skills = r.body.skills || [];
+    if (!skills.length) {
+      selectEl.appendChild(el('option', { value: '' }, '📋 no skills (create .chatsync/skills/*.md)'));
+      return;
+    }
+    selectEl.appendChild(el('option', { value: '' }, '📋 Skills (' + skills.length + ')...'));
+    for (const s of skills) {
+      const label = s.name + (s.description ? ' — ' + s.description.slice(0, 40) : '');
+      selectEl.appendChild(el('option', { value: s.slug, title: s.description || '' }, label));
+    }
+  }
+
+  async function reloadSkills(selectEl) {
+    setBusy(true);
+    const r = await api.skillsReload();
+    setBusy(false);
+    if (!r.ok) { toast('Skills reload: lỗi ' + r.status, 'err'); return; }
+    toast('Đã reload: ' + r.body.count + ' skill', 'ok', 2000);
+    await loadSkillsIntoSelect(selectEl);
   }
   function openTabsModal() {
     (async () => {
@@ -555,14 +591,10 @@
     ].map(([v, label]) => el('option', { value: v, selected: v === state.insertMode }, label)));
     modeSelect.value = state.insertMode;
 
-    const lineInput = el('input', { type: 'number', min: '1', value: '1', style: 'display:none' });
-    const endLineInput = el('input', { type: 'number', min: '1', value: '1', style: 'display:none' });
     const searchInput = el('textarea', { rows: '3', placeholder: 'Đoạn text cần tìm trong file…', style: 'display:none;width:100%;box-sizing:border-box;background:#111214;color:#e8e8e8;border:1px solid #3a3d44;border-radius:6px;padding:6px 8px;font-family:ui-monospace,monospace;font-size:12px' });
 
     const sync = () => {
       const mode = modeSelect.value;
-      lineInput.style.display = mode === 'insertAtLine' || mode === 'lines' ? '' : 'none';
-      endLineInput.style.display = mode === 'lines' ? '' : 'none';
       searchInput.style.display = mode === 'patch' ? '' : 'none';
       if (mode === 'patch' && !searchInput.value) {
         const lines = code.split('\n');
@@ -594,10 +626,6 @@
           pathInput,
           el('label', {}, 'Chế độ ghi'),
           modeSelect,
-          el('label', {}, 'Dòng bắt đầu'),
-          lineInput,
-          el('label', {}, 'Dòng kết thúc'),
-          endLineInput,
           el('label', {}, 'Đoạn text cần tìm (patch)'),
           searchInput,
         ),
@@ -616,8 +644,6 @@
               path: pathInput.value.trim() || undefined,
               mode: modeSelect.value,
               content: code,
-              line: Number(lineInput.value) || undefined,
-              endLine: Number(endLineInput.value) || undefined,
               search: modeSelect.value === 'patch' ? searchInput.value : undefined,
               preview: previewCheck.checked,
               save: saveCheck.checked,
@@ -907,6 +933,9 @@
     const btnTabs = el('button', { class: 'cs-btn', text: '🗂 Chọn file…', onclick: openTabsModal });
     const btnFolder = el('button', { class: 'cs-btn', text: '📁 Attach folder…', onclick: attachFolder });
     const btnResolveFolder = el('button', { class: 'cs-btn', text: '@folder resolve', onclick: resolveInlineFolders, title: 'Tìm @folder:path trong prompt và chèn nội dung folder' });
+    const skillSelect = el('select', { style: 'flex:2 1 auto;background:#2b2d33;color:#e8e8e8;border:1px solid #3a3d44;border-radius:8px;padding:6px 8px;font-size:12px' }, el('option', { value: '' }, '📋 Skills (click ↻)'));
+    const btnSkillApply = el('button', { class: 'cs-btn', text: 'Add skill', onclick: () => { const v = skillSelect.value; if (!v) return toast('Chọn skill trước', 'warn'); attachSkill(v); } });
+    const btnSkillRefresh = el('button', { class: 'cs-btn', text: '↻', title: 'Reload skills', onclick: () => reloadSkills(skillSelect), style: 'flex:0 0 auto;min-width:36px' });
     const btnApplyAll = el('button', { class: 'cs-btn', text: '⚡ Apply all blocks', onclick: applyAllBlocks });
     const btnRefresh = el('button', { class: 'cs-btn', text: '🔄 Refresh', onclick: refreshStatus });
     const btnSettings = el('button', { class: 'cs-btn', text: '⚙ Settings', onclick: toggleSettings });
@@ -946,6 +975,7 @@
       el('div', { class: 'cs-row' }, btnAttach, btnAttachDiag),
       el('div', { class: 'cs-row' }, btnErrors, btnTabs),
       el('div', { class: 'cs-row' }, btnFolder, btnResolveFolder),
+      el('div', { class: 'cs-row' }, skillSelect, btnSkillApply, btnSkillRefresh),
       el('div', { class: 'cs-row' }, btnApplyAll, btnRefresh, btnSettings),
       settingsBox,
     );
@@ -971,9 +1001,17 @@
     });
   }
 
+  let _skillsLoaded = false;
   function togglePanel() {
     panel.classList.toggle('cs-open');
-    if (panel.classList.contains('cs-open')) refreshStatus();
+    if (panel.classList.contains('cs-open')) {
+      refreshStatus();
+      if (!_skillsLoaded) {
+        _skillsLoaded = true;
+        const sel = panel.querySelector('select');
+        if (sel) loadSkillsIntoSelect(sel);
+      }
+    }
   }
 
   function openSettingsSection() {
@@ -986,13 +1024,11 @@
   }
 
   function setOnline(on) {
-    state.online = on;
     fab.classList.toggle('cs-on', on);
     fab.classList.toggle('cs-err', !on);
   }
 
   function setBusy(busy) {
-    state.busy = busy;
     fab.style.opacity = busy ? '0.6' : '';
   }
 
