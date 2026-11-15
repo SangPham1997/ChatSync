@@ -1,5 +1,6 @@
 {
   "compilerOptions": {
+    "types": ["node", "vscode"],
     "module": "commonjs",
     "target": "ES2021",
     "lib": ["ES2021"],
