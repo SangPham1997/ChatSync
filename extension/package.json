@@ -2,7 +2,7 @@
   "name": "chatsync",
   "displayName": "ChatSync — Bridge Chat ↔ VSCode",
   "description": "Local HTTP bridge that lets a browser userscript (Tampermonkey) read editor context (active file, selection, problems) and apply AI-generated code blocks back into VSCode. CORS-ready, localhost-only, token protected.",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "publisher": "local",
   "license": "MIT",
   "icon": "icon.png",
@@ -152,16 +152,6 @@
           "type": "number",
           "default": 300,
           "description": "How long a diff preview stays pending before it is discarded."
-        },
-        "chatsync.allowRunCommand": {
-          "type": "boolean",
-          "default": false,
-          "description": "Allow POST /run to execute arbitrary VSCode commands from the browser. Off by default (dangerous)."
-        },
-        "chatsync.allowTerminal": {
-          "type": "boolean",
-          "default": false,
-          "description": "Allow POST /terminal to send text to the integrated terminal. Off by default (dangerous)."
         },
         "chatsync.rateLimitPerMinute": {
           "type": "number",

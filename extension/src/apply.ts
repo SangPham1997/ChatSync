@@ -12,10 +12,8 @@ export type ApplyMode =
   | 'replace' // replace whole file content
   | 'replaceSelection' // replace current selection (or insert at cursor if none)
   | 'insert' // insert at cursor
-  | 'insertAtLine' // insert before a 1-based line
   | 'append' // append to end of file
   | 'patch' // find `search` -> replace with `replace` (must be unique unless replaceAll)
-  | 'lines' // replace an inclusive 1-based line range
   | 'newFile'; // create a new file
 
 export interface ApplyPayload {
@@ -170,16 +168,6 @@ function targetRange(doc: vscode.TextDocument, mode: ApplyMode, payload: ApplyPa
       }
       return { error: 'replaceSelection needs the target file to be the active editor' };
     }
-    case 'insertAtLine': {
-      const line = clamp(payload.line, 1, doc.lineCount + 1, doc.lineCount + 1) - 1;
-      const pos = line >= doc.lineCount ? doc.lineAt(doc.lineCount - 1).range.end : new vscode.Position(line, 0);
-      return { range: new vscode.Range(pos, pos) };
-    }
-    case 'lines': {
-      const start = clamp(payload.line, 1, doc.lineCount, 1) - 1;
-      const end = clamp(payload.endLine ?? payload.line, start + 1, doc.lineCount, start + 1) - 1;
-      return { range: new vscode.Range(new vscode.Position(start, 0), doc.lineAt(end).range.end) };
-    }
     case 'patch': {
       const search = payload.search ?? '';
       const r = computeRangeForPatch(doc, search);
@@ -203,13 +191,7 @@ function buildNewContent(doc: vscode.TextDocument, mode: ApplyMode, payload: App
     case 'append':
       return text.endsWith(eol) || text.length === 0 ? text + insert : text + eol + insert;
     case 'insert':
-    case 'insertAtLine':
     case 'replaceSelection': {
-      const before = text.slice(0, doc.offsetAt(range.start));
-      const after = text.slice(doc.offsetAt(range.end));
-      return before + insert + after;
-    }
-    case 'lines': {
       const before = text.slice(0, doc.offsetAt(range.start));
       const after = text.slice(doc.offsetAt(range.end));
       return before + insert + after;
@@ -629,42 +611,4 @@ export function discardAllPending(): void {
   for (const p of [...pending.values()]) {
     cleanupPending(p);
   }
-}
-
-/* ------------------------------------------------------------------ *
- * Optional, off-by-default power endpoints
- * ------------------------------------------------------------------ */
-
-export async function handleRunCommand(req: ApiRequest): Promise<ApiResponse> {
-  const cfg = getConfig();
-  if (!cfg.allowRunCommand) {
-    return { status: 403, body: { ok: false, error: 'chatsync.allowRunCommand is disabled' } };
-  }
-  const body = (req.body ?? {}) as { command?: string; args?: unknown[] };
-  if (!body.command) {
-    return { status: 400, body: { ok: false, error: 'missing command' } };
-  }
-  try {
-    const result = await vscode.commands.executeCommand(body.command, ...(body.args ?? []));
-    return { status: 200, body: { ok: true, command: body.command, result: result === undefined ? null : result } };
-  } catch (e) {
-    return { status: 500, body: { ok: false, error: (e as Error).message } };
-  }
-}
-
-export async function handleTerminal(req: ApiRequest): Promise<ApiResponse> {
-  const cfg = getConfig();
-  if (!cfg.allowTerminal) {
-    return { status: 403, body: { ok: false, error: 'chatsync.allowTerminal is disabled' } };
-  }
-  const body = (req.body ?? {}) as { text?: string; name?: string; execute?: boolean };
-  if (!body.text) {
-    return { status: 400, body: { ok: false, error: 'missing text' } };
-  }
-  const term =
-    vscode.window.terminals.find((t) => t.name === (body.name ?? 'ChatSync')) ??
-    vscode.window.createTerminal({ name: body.name ?? 'ChatSync' });
-  term.show(true);
-  term.sendText(body.text, body.execute !== false);
-  return { status: 200, body: { ok: true, sent: body.text, executed: body.execute !== false } };
 }

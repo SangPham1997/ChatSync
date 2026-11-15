@@ -13,6 +13,7 @@ import {
   handleFileContent,
   handleTabs,
 } from './context';
+import { handleFolderContent } from './folder';
 import {
   discardAllPending,
   handleApply,
@@ -20,8 +21,6 @@ import {
   handleApplyCancel,
   handleApplyConfirm,
   handleApplyList,
-  handleRunCommand,
-  handleTerminal,
   pendingCount,
 } from './apply';
 
@@ -345,6 +344,7 @@ export class ChatSyncServer {
         '/context/workspace': handleContextWorkspace,
         '/tabs': handleTabs,
         '/file': handleFileContent,
+        '/folder': handleFolderContent,
         '/apply/list': handleApplyList,
       },
       POST: {
@@ -352,8 +352,6 @@ export class ChatSyncServer {
         '/apply/batch': handleApplyBatch,
         '/apply/confirm': handleApplyConfirm,
         '/apply/cancel': handleApplyCancel,
-        '/run': handleRunCommand,
-        '/terminal': handleTerminal,
       },
     };
 
@@ -385,8 +383,6 @@ export class ChatSyncServer {
       tokenHint: cfg.requireToken ? 'also sent here so a freshly installed userscript can auto-configure on localhost' : undefined,
       applyMode: cfg.applyMode,
       autoSave: cfg.autoSave,
-      allowRunCommand: cfg.allowRunCommand,
-      allowTerminal: cfg.allowTerminal,
       vscodeVersion: vscode.version,
       workspace: workspaceRoot(),
       workspaceName: vscode.workspace.workspaceFolders?.[0]?.name,

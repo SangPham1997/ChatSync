@@ -160,6 +160,7 @@
     tabs: () => request('GET', '/tabs'),
     workspace: () => request('GET', '/context/workspace'),
     file: (p) => request('GET', `/file?path=${encodeURIComponent(p)}`),
+    folder: (p, opts) => { const params = new URLSearchParams({ path: p }); if (opts) for (const k of Object.keys(opts)) { const v = opts[k]; if (v !== undefined && v !== null) params.set(k, String(v)); } return request('GET', '/folder?' + params.toString()); },
     apply: (payload) => request('POST', '/apply', payload),
     applyBatch: (applies) => request('POST', '/apply/batch', { applies }),
     confirm: (id) => request('POST', '/apply/confirm', { applyId: id }),
@@ -397,6 +398,42 @@
     toast(`Đã chèn ${r.body.count} diagnostics.`, 'ok');
   }
 
+  async function attachFolder() {
+    const p = prompt('Folder path (relative to workspace):', 'src');
+    if (!p) return;
+    const depthStr = prompt('Max depth (default 2, 0-5):', '2');
+    const depth = depthStr ? parseInt(depthStr, 10) : 2;
+    setBusy(true);
+    const r = await api.folder(p, { depth, includeContent: 1 });
+    setBusy(false);
+    if (!r.ok) return reportError('Attach folder', r);
+    const b = r.body;
+    insertIntoComposer(b.contextText);
+    toast('Đã chèn folder ' + b.root + ': ' + b.filesWithContent + '/' + b.fileCount + ' file (' + b.totalChars + ' chars)', 'ok');
+  }
+
+  async function resolveInlineFolders() {
+    const composer = findComposer();
+    if (!composer) { toast('Không tìm thấy ô nhập chat.', 'err'); return; }
+    const text = composer.tagName === 'TEXTAREA' ? composer.value : (composer.innerText || composer.textContent || '');
+    const re = /@folder:([^\s`"'\]\)]+)(?:\s+depth=(\d+))?/g;
+    const matches = [...text.matchAll(re)];
+    if (!matches.length) { toast('Không có @folder:... trong prompt. Ví dụ: @folder:src depth=2', 'warn'); return; }
+    let newText = text;
+    let okCount = 0;
+    for (const m of matches) {
+      const fp = m[1];
+      const dp = m[2] ? parseInt(m[2], 10) : 2;
+      setBusy(true);
+      const r = await api.folder(fp, { depth: dp, includeContent: 1 });
+      setBusy(false);
+      if (!r.ok) { toast('@folder:' + fp + ' -> lỗi ' + r.status, 'err'); continue; }
+      newText = newText.replace(m[0], r.body.contextText);
+      okCount++;
+    }
+    insertIntoComposer(newText, { replace: true });
+    toast('Đã resolve ' + okCount + '/' + matches.length + ' @folder', okCount ? 'ok' : 'warn');
+  }
   function openTabsModal() {
     (async () => {
       setBusy(true);
@@ -478,15 +515,18 @@
    * 6. Apply actions
    * ================================================================== */
 
+  const _EXT_WHITELIST = /\.(ts|tsx|js|jsx|mjs|cjs|py|rb|go|rs|java|c|cpp|h|hpp|cs|php|swift|kt|md|json|yaml|yml|toml|xml|html|htm|css|scss|sass|less|vue|svelte|astro|sh|bash|ps1|sql|graphql|gql)$/i;
   function detectPathNearBlock(block) {
-    // look at the previous sibling / heading for something like `src/app.ts`
     let node = block;
     for (let depth = 0; depth < 4 && node; depth++) {
       let prev = node.previousElementSibling;
       for (let i = 0; i < 3 && prev; i++) {
         const text = (prev.textContent || '').trim();
         const m = /([A-Za-z0-9_./\\-]+\.[A-Za-z0-9]{1,8})/.exec(text);
-        if (m && m[1].length < 120 && !/\s/.test(m[1])) return m[1];
+        if (m && m[1].length < 120 && !/\s/.test(m[1])) {
+          const p = m[1];
+          if (p.includes('/') && _EXT_WHITELIST.test(p)) return p;
+        }
         prev = prev.previousElementSibling;
       }
       node = node.parentElement;
@@ -510,8 +550,6 @@
       ['replaceSelection', 'replaceSelection — thay thế vùng đang bôi đen'],
       ['insert', 'insert — chèn tại con trỏ'],
       ['append', 'append — thêm vào cuối file'],
-      ['insertAtLine', 'insertAtLine — chèn trước dòng N'],
-      ['lines', 'lines — thay thế từ dòng N đến M'],
       ['newFile', 'newFile — tạo file mới'],
       ['patch', 'patch — search & replace (cần chọn text)'],
     ].map(([v, label]) => el('option', { value: v, selected: v === state.insertMode }, label)));
@@ -662,22 +700,39 @@
       toast('Không tìm thấy code block nào trong trang.', 'warn');
       return;
     }
-    const ctx = await api.contextFile('content=0');
-    const activePath = ctx.ok && ctx.body.hasEditor ? ctx.body.relPath : '';
-    const applies = blocks.map((b) => ({
-      path: b.pathHint || activePath || undefined,
+    const candidates = blocks.filter((b) => b.pathHint && b.pathHint.includes('/'));
+    if (!candidates.length) {
+      toast('Không có block nào có path rõ ràng (vd "src/foo.ts"). Dùng "⚙ Options" để chỉ định thủ công.', 'warn', 6000);
+      return;
+    }
+    const skipped = blocks.length - candidates.length;
+    const pathCount = new Map();
+    for (const b of candidates) pathCount.set(b.pathHint, (pathCount.get(b.pathHint) || 0) + 1);
+    const conflicts = [...pathCount.entries()].filter(([, n]) => n > 1).map(([p]) => p);
+    if (conflicts.length) {
+      toast(`Bỏ qua batch: ${conflicts.length} path bị trùng. Apply từng block thủ công.\n${conflicts.slice(0,3).join(', ')}${conflicts.length>3?'…':''}`, 'warn', 8000);
+      return;
+    }
+    const applies = candidates.map((b) => ({
+      path: b.pathHint,
       mode: 'replace',
       content: b.code,
-      preview: false,
+      preview: true,
       save: state.autoSave,
       label: 'apply-all',
     }));
-    if (!confirm(`Ghi ${applies.length} code block vào VSCode (mode=replace, không preview)?`)) return;
-    setBusy(true);
-    const r = await api.applyBatch(applies);
-    setBusy(false);
-    if (!r.ok) return reportError('Apply all', r);
-    toast(`Batch: ${r.body.count - r.body.failed}/${r.body.count} thành công.`, r.body.failed ? 'warn' : 'ok', 6000);
+    const msg = `Preview ${applies.length} file trong VSCode?` +
+      (skipped ? `\n(${skipped} block không có path rõ ràng đã bị bỏ qua)` : '') +
+      '\nBạn sẽ confirm từng diff.';
+    if (!confirm(msg)) return;
+    let ok = 0, fail = 0;
+    for (const a of applies) {
+      setBusy(true);
+      const r = await api.apply(a);
+      setBusy(false);
+      if (r.ok && (r.body.preview || r.body.applied)) ok++; else fail++;
+    }
+    toast(`Đã mở ${ok} diff${fail?`, ${fail} lỗi`:''}. Confirm trong VSCode.`, fail ? 'warn' : 'ok', 5000);
   }
 
   /* ================================================================== *
@@ -850,6 +905,8 @@
     const btnAttachDiag = el('button', { class: 'cs-btn', text: '📎 File + Problems', onclick: () => attachActiveFile({ withDiagnostics: true }) });
     const btnErrors = el('button', { class: 'cs-btn', text: '🐞 Attach Problems', onclick: () => attachErrors('Warning') });
     const btnTabs = el('button', { class: 'cs-btn', text: '🗂 Chọn file…', onclick: openTabsModal });
+    const btnFolder = el('button', { class: 'cs-btn', text: '📁 Attach folder…', onclick: attachFolder });
+    const btnResolveFolder = el('button', { class: 'cs-btn', text: '@folder resolve', onclick: resolveInlineFolders, title: 'Tìm @folder:path trong prompt và chèn nội dung folder' });
     const btnApplyAll = el('button', { class: 'cs-btn', text: '⚡ Apply all blocks', onclick: applyAllBlocks });
     const btnRefresh = el('button', { class: 'cs-btn', text: '🔄 Refresh', onclick: refreshStatus });
     const btnSettings = el('button', { class: 'cs-btn', text: '⚙ Settings', onclick: toggleSettings });
@@ -873,7 +930,7 @@
         el('label', {}, 'Apply mode mặc định'),
         (() => {
           const s = el('select', { onchange: (e) => { state.insertMode = e.target.value; saveSettings(); } },
-            ...['replace', 'replaceSelection', 'insert', 'append', 'lines', 'newFile', 'patch'].map((v) => el('option', { value: v }, v)));
+            ...['replace', 'replaceSelection', 'insert', 'append', 'newFile', 'patch'].map((v) => el('option', { value: v }, v)));
           s.value = state.insertMode;
           return s;
         })(),
@@ -888,6 +945,7 @@
       statusBox,
       el('div', { class: 'cs-row' }, btnAttach, btnAttachDiag),
       el('div', { class: 'cs-row' }, btnErrors, btnTabs),
+      el('div', { class: 'cs-row' }, btnFolder, btnResolveFolder),
       el('div', { class: 'cs-row' }, btnApplyAll, btnRefresh, btnSettings),
       settingsBox,
     );

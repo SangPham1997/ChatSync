@@ -13,8 +13,6 @@ export interface ChatSyncConfig {
   applyMode: 'diff' | 'direct';
   autoSave: boolean;
   previewTimeoutSeconds: number;
-  allowRunCommand: boolean;
-  allowTerminal: boolean;
   rateLimitPerMinute: number;
   logRequests: boolean;
 }
@@ -45,8 +43,6 @@ export function getConfig(): ChatSyncConfig {
     applyMode: get<'diff' | 'direct'>('applyMode', 'diff'),
     autoSave: get<boolean>('autoSave', false),
     previewTimeoutSeconds: get<number>('previewTimeoutSeconds', 300),
-    allowRunCommand: get<boolean>('allowRunCommand', false),
-    allowTerminal: get<boolean>('allowTerminal', false),
     rateLimitPerMinute: get<number>('rateLimitPerMinute', 240),
     logRequests: get<boolean>('logRequests', true),
   };
