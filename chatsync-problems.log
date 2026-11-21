@@ -1,0 +1,22 @@
+=== ChatSync Diagnostic 2026-11-21 12:59:08 ===
+
+--- SERVER ---
+✅ Server OK — port 7123, version 
+
+--- BUILD ---
+✅ out/extension.js (312.1 KB)
+
+--- USERSCRIPT ---
+✅ chatsync-userscript.user.js (18 lines)
+   Palette: ❌ STUB
+   Composer: ❌ STUB
+   API: ✅
+
+--- TESTS ---
+✅ Tests: 37 passed, 0 failed
+
+--- SOURCE FILES ---
+✅ All 12 required source files present
+
+--- PORT CHECK ---
+✅ Port 7123 used by PID 20848 (pwsh)
