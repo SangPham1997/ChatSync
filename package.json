@@ -1,8 +1,15 @@
 {
   "name": "chatsync",
   "displayName": "ChatSync",
+  "description": "Bridge connecting AI web chats (DeepSeek, ChatGPT, Claude) with VS Code.",
   "version": "0.1.0",
-  "private": true,
+  "publisher": "chatsync",
+  "icon": "icon.png",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/local/chatsync"
+  },
   "engines": {
     "vscode": "^1.95.0"
   },
@@ -50,13 +57,22 @@
     "verify:m3": "npm run typecheck && npm run test:m3",
     "test:server": "vitest run test/unit/server",
     "build:ext": "node esbuild.mjs",
-    "watch:ext": "node esbuild.mjs --watch"
+    "watch:ext": "node esbuild.mjs --watch",
+    "package:vsix": "npm run build:ext && vsce package --no-dependencies --allow-missing-repository -o chatsync-0.1.0.vsix"
   },
   "activationEvents": [
     "onStartupFinished"
   ],
   "contributes": {
     "commands": [
+      {
+        "command": "chatsync.showInfo",
+        "title": "ChatSync: Show Connection Info"
+      },
+      {
+        "command": "chatsync.status",
+        "title": "ChatSync: Check Server Status"
+      },
       {
         "command": "chatsync.review.show",
         "title": "ChatSync: Show Review"

@@ -15,7 +15,7 @@ export default defineConfig({
           'https://claude.ai/*',
         ],
         grant: ['GM_getValue', 'GM_setValue', 'GM_xmlhttpRequest'],
-        connect: ['localhost:7123', '127.0.0.1:7123'],
+        connect: ['localhost', '127.0.0.1'],
       },
     }),
   ],

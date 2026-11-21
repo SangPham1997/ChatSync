@@ -2,7 +2,7 @@
 // @name         ChatSync for DeepSeek ↔ VSCode
 // @namespace    https://github.com/local/chatsync
 // @version      0.1.0
-// @description  Attach live VSCode context (active file / selection / problems) to the chat prompt and apply AI code blocks back into your editor. Talks to the ChatSync extension over http://127.0.0.1:3847.
+// @description  Attach live VSCode context (active file / selection / problems) to the chat prompt and apply AI code blocks back into your editor. Talks to the ChatSync extension over http://127.0.0.1:7123.
 // @author       ChatSync
 // @match        https://chat.deepseek.com/*
 // @match        https://chatgpt.com/*
@@ -34,7 +34,7 @@
 
   // These two values are rewritten automatically by the VSCode command
   // "ChatSync: Save userscript into workspace" so you don't have to type them.
-  const DEFAULTS = { port: 3847, token: '' };
+  const DEFAULTS = { port: 7123, token: '' };
 
   const SETTINGS_KEY = 'chatsync.settings.v1';
   const POLL_MS = 15000;
@@ -57,7 +57,11 @@
     } catch (_) {
       saved = {};
     }
-    state.base = saved.base || `http://127.0.0.1:${saved.port || DEFAULTS.port}`;
+    let port = saved.port || DEFAULTS.port;
+    if (port === 3847) port = DEFAULTS.port;
+    let base = saved.base || `http://127.0.0.1:${port}`;
+    if (base.includes(':3847')) base = base.replace(':3847', `:${DEFAULTS.port}`);
+    state.base = base;
     state.token = saved.token || DEFAULTS.token || '';
     state.preview = saved.preview !== false;
     state.autoSave = saved.autoSave === true;
@@ -69,7 +73,7 @@
     gmSet(
       SETTINGS_KEY,
       JSON.stringify({
-        base: `${url.protocol}//${url.hostname}:${url.port || 3847}`,
+        base: `${url.protocol}//${url.hostname}:${url.port || 7123}`,
         token: state.token,
         preview: state.preview,
         autoSave: state.autoSave,
