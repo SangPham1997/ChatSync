@@ -1,0 +1,13 @@
+src/**
+test/**
+reports/**
+.chatsync-backup/**
+out/**/*.map
+userscript/**
+node_modules/**
+*.vsix
+.gitignore
+esbuild.mjs
+playwright.config.ts
+vitest.config.ts
+tsconfig.json
