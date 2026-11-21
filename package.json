@@ -20,9 +20,9 @@
     "simple-git": "^3.27.0",
     "strip-ansi": "^7.1.0",
     "tree-kill": "^1.2.2",
+    "web-tree-sitter": "^0.24.0",
     "xstate": "^5.19.1",
-    "zod": "^3.24.1",
-    "web-tree-sitter": "^0.24.0"
+    "zod": "^3.24.1"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.1",
@@ -32,6 +32,7 @@
     "@vscode/test-electron": "^2.4.1",
     "esbuild": "^0.24.2",
     "happy-dom": "^15.11.7",
+    "tree-sitter-wasms": "^0.1.13",
     "typescript": "^5.7.2",
     "vitest": "^2.1.8"
   },
@@ -40,12 +41,13 @@
     "userscript:build": "npm --prefix userscript run build",
     "userscript:typecheck": "npm --prefix userscript run typecheck",
     "test:unit": "vitest run",
-    "verify:all": "npm run typecheck && npm run test:unit",
+    "verify:all": "npm run typecheck && npm run test:m2 && npm run test:m3 && npm run test:server",
     "test:e2e": "playwright test",
     "verify:m2": "npm run typecheck && npm run test:m2",
     "test:m2": "vitest run test/unit/patch test/unit/merge3 test/unit/approve",
     "test:m3": "vitest run test/unit/context test/unit/symbols",
-    "verify:m3": "npm run typecheck && npm run test:m3"
+    "verify:m3": "npm run typecheck && npm run test:m3",
+    "test:server": "vitest run test/unit/server"
   },
   "activationEvents": [
     "onStartupFinished"
