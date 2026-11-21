@@ -47,7 +47,9 @@
     "test:m2": "vitest run test/unit/patch test/unit/merge3 test/unit/approve",
     "test:m3": "vitest run test/unit/context test/unit/symbols",
     "verify:m3": "npm run typecheck && npm run test:m3",
-    "test:server": "vitest run test/unit/server"
+    "test:server": "vitest run test/unit/server",
+    "build:ext": "node esbuild.mjs",
+    "watch:ext": "node esbuild.mjs --watch"
   },
   "activationEvents": [
     "onStartupFinished"
