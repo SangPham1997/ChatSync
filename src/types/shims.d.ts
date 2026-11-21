@@ -1,6 +1,4 @@
-// Vendored type shims for packages that ship no @types and none exists on npm.
-// Keep declarations minimal -- only what our code actually uses.
-
+// Vendored type shims for packages that ship no @types.
 declare module 'tree-kill' {
   type Signal =
     | 'SIGTERM' | 'SIGKILL' | 'SIGINT' | 'SIGHUP' | 'SIGQUIT'
@@ -12,16 +10,21 @@ declare module 'tree-kill' {
 
 declare module 'node-diff3' {
   export interface Diff3Conflict {
-    a: string[]
-    o: string[]
-    b: string[]
-    aIndex: number
-    oIndex: number
-    bIndex: number
+    a: string[]; o: string[]; b: string[]
+    aIndex: number; oIndex: number; bIndex: number
   }
   export interface Diff3Region {
     ok?: string[]
     conflict?: Diff3Conflict
   }
-  export function diff3Merge(a: string[], o: string[], b: string[]): Diff3Region[]
+  export interface Diff3Options {
+    excludeFalseConflicts?: boolean
+    stringSeparator?: RegExp | string
+  }
+  export function diff3Merge(
+    a: string[],
+    o: string[],
+    b: string[],
+    options?: Diff3Options
+  ): Diff3Region[]
 }

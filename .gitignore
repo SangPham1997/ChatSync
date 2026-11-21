@@ -1,5 +1,3 @@
-
-
 # ChatSync M1
 node_modules/
 out/
@@ -9,3 +7,7 @@ userscript/dist/
 .env
 test-results/
 playwright-report/
+
+# ChatSync bootstrap
+reports/
+.chatsync-backup/

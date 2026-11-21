@@ -21,7 +21,8 @@
     "strip-ansi": "^7.1.0",
     "tree-kill": "^1.2.2",
     "xstate": "^5.19.1",
-    "zod": "^3.24.1"
+    "zod": "^3.24.1",
+    "web-tree-sitter": "^0.24.0"
   },
   "devDependencies": {
     "@playwright/test": "^1.49.1",
@@ -42,6 +43,19 @@
     "verify:all": "npm run typecheck && npm run test:unit",
     "test:e2e": "playwright test",
     "verify:m2": "npm run typecheck && npm run test:m2",
-    "test:m2": "vitest run test/unit/patch test/unit/merge3 test/unit/approve"
+    "test:m2": "vitest run test/unit/patch test/unit/merge3 test/unit/approve",
+    "test:m3": "vitest run test/unit/context test/unit/symbols",
+    "verify:m3": "npm run typecheck && npm run test:m3"
+  },
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "chatsync.review.show",
+        "title": "ChatSync: Show Review"
+      }
+    ]
   }
 }
