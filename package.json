@@ -1,0 +1,47 @@
+{
+  "name": "chatsync",
+  "displayName": "ChatSync",
+  "version": "0.1.0",
+  "private": true,
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "main": "./out/extension.js",
+  "dependencies": {
+    "diff-match-patch": "^1.0.5",
+    "diff2html": "^3.4.51",
+    "dompurify": "^3.2.3",
+    "execa": "^9.5.2",
+    "gray-matter": "^4.0.3",
+    "lru-cache": "^11.0.2",
+    "marked": "^15.0.4",
+    "node-diff3": "^3.1.2",
+    "p-queue": "^8.0.1",
+    "simple-git": "^3.27.0",
+    "strip-ansi": "^7.1.0",
+    "tree-kill": "^1.2.2",
+    "xstate": "^5.19.1",
+    "zod": "^3.24.1"
+  },
+  "devDependencies": {
+    "@playwright/test": "^1.49.1",
+    "@types/diff-match-patch": "^1.0.36",
+    "@types/node": "^22.10.2",
+    "@types/vscode": "^1.95.0",
+    "@vscode/test-electron": "^2.4.1",
+    "esbuild": "^0.24.2",
+    "happy-dom": "^15.11.7",
+    "typescript": "^5.7.2",
+    "vitest": "^2.1.8"
+  },
+  "scripts": {
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "userscript:build": "npm --prefix userscript run build",
+    "userscript:typecheck": "npm --prefix userscript run typecheck",
+    "test:unit": "vitest run",
+    "verify:all": "npm run typecheck && npm run test:unit",
+    "test:e2e": "playwright test",
+    "verify:m2": "npm run typecheck && npm run test:m2",
+    "test:m2": "vitest run test/unit/patch test/unit/merge3 test/unit/approve"
+  }
+}
